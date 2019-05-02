@@ -42,8 +42,6 @@ class Marker(Enum):
         return Marker.list().index(self)
 
     def colorize(self, text):
-        if self == Marker.START or self == Marker.END:
-            raise AssertionError("Tried to colorize with technical marker: {}".format(self))
         return {
             Marker.ORGANIZATION: ur"\u001b[36m{}\u001b[0m",
             Marker.PERSON: ur"\u001b[32m{}\u001b[0m",
@@ -105,7 +103,6 @@ class Model:
         self.marker_backoff_prob_1 = [[0.0] * size for _ in xrange(size)]       # Without word_prev
         self.marker_backoff_prob_2 = [0.0] * size                               # Without marker_prev
 
-        self.first_backoff_prob_0 = [[defaultdict(float) for _ in xrange(size)] for _ in xrange(size)]
         self.first_backoff_prob_1 = [defaultdict(float) for _ in xrange(size)]  # Without marker_prev
         self.first_backoff_prob_2 = [defaultdict(float) for _ in xrange(size)]  # With features instead of words
 
@@ -116,40 +113,38 @@ class Model:
     # Pr(NC | NC^-1, W^-1)
     def marker_prob(self, marker_prev, word_prev, marker_curr):
         prob = self.marker_selection_prob[marker_prev][word_prev][marker_curr]
-        # if not prob:
-        #     prob = self.marker_backoff_prob_0[marker_prev][Feature.get(word_prev)][marker_curr]
-        # if not prob:
-        #     prob = self.marker_backoff_prob_1[marker_prev][marker_curr]
-        # if not prob:
-        #     prob = self.marker_backoff_prob_2[marker_curr]
-        # if not prob:
-        #     prob = 1 / len(Marker.list()
+        if not prob:
+            prob = self.marker_backoff_prob_0[marker_prev][Feature.get(word_prev)][marker_curr]
+        if not prob:
+            prob = self.marker_backoff_prob_1[marker_prev][marker_curr]
+        if not prob:
+            prob = self.marker_backoff_prob_2[marker_curr]
+        if not prob:
+            prob = 1 / len(Marker.list())
         return prob
 
     # Pr(WF_1 | NC, NC^-1)
     def first_prob(self, marker_prev, marker_curr, word_curr):
         prob = self.first_selection_prob[marker_prev][marker_curr][word_curr]
-        # if not prob:
-        #     prob = (1 / self.num_words) * self.first_backoff_prob_0[marker_prev][marker_curr][Feature.get(word_curr)]
-        # if not prob:
-        #     prob = self.first_backoff_prob_1[marker_curr][word_curr]
-        # if not prob:
-        #     prob = self.first_backoff_prob_2[marker_curr][Feature.get(word_curr)]
-        # if not prob:
-        #     prob = 1 / self.num_words
+        if not prob:
+            prob = self.first_backoff_prob_1[marker_curr][word_curr]
+        if not prob:
+            prob = self.first_backoff_prob_2[marker_curr][Feature.get(word_curr)]
+        if not prob:
+            prob = 1 / self.num_words
         return prob
 
     # Pr(WF | WF^-1, NC)
     def next_prob(self, marker_curr, word_prev, word_curr):
         prob = self.next_selection_prob[marker_curr][word_prev][word_curr]
-        # if not prob:
-        #     prob = (1 / self.num_words) * self.next_backoff_prob_0[marker_curr][Feature.get(word_prev)][word_curr]
-        # if not prob:
-        #     prob = self.next_backoff_prob_1[marker_curr][word_curr]
-        # if not prob:
-        #     prob = self.next_backoff_prob_2[marker_curr][Feature.get(word_curr)]
-        # if not prob:
-        #     prob = 1 / self.num_words
+        if not prob:
+            prob = self.next_backoff_prob_0[marker_curr][Feature.get(word_prev)][word_curr]
+        if not prob:
+            prob = self.next_backoff_prob_1[marker_curr][word_curr]
+        if not prob:
+            prob = self.next_backoff_prob_2[marker_curr][Feature.get(word_curr)]
+        if not prob:
+            prob = 1 / self.num_words
         return prob
 
     def fit(self, train_data):
@@ -248,15 +243,6 @@ class Model:
                     num = marker_selections_0[feature_prev][marker_curr]
                     self.marker_backoff_prob_0[marker_prev][feature_prev][marker_curr] = num / denom
 
-        for marker_prev in xrange(size):
-            for marker_curr in xrange(size):
-                denom = marker_trans[marker_prev][marker_curr]
-                marker_trans_wordf_0 = defaultdict(int)
-                for (word_curr, num) in marker_trans_wordf[marker_prev][marker_curr].iteritems():
-                    marker_trans_wordf_0[Feature.get(word_curr)] += num
-                for (feature_curr, num) in marker_trans_wordf_0.iteritems():
-                    self.first_backoff_prob_0[marker_prev][marker_curr][feature_curr] = num / denom
-
         for marker_curr in xrange(size):
             marker_wordf_0 = defaultdict(int)
             marker_wordf_trans_0 = defaultdict(lambda: defaultdict(int))
@@ -293,8 +279,6 @@ class Model:
                     else:
                         prob = self.next_prob(marker_curr, word_prev, word_curr)
                         prob *= 1.0 - self.next_prob(marker_curr, word_prev, word_end)
-                    if prob < 1e-20:
-                        prob = 1e-20
                     prob *= probs_prev[marker_prev]
                     if prob > probs_curr[marker_curr]:
                         probs_curr[marker_curr] = prob
@@ -307,8 +291,6 @@ class Model:
         last_marker = 0
         for marker_prev in xrange(size):
             prob = self.next_prob(marker_curr, word_prev, word_end)
-            if prob < 1e-20:
-                prob = 1e-20
             prob *= probs_prev[marker_prev]
             if prob > prob_end:
                 prob_end = prob
