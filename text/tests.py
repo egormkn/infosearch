@@ -83,9 +83,9 @@ class Feature(Enum):
         ]
 
     @staticmethod
-    def get(text):
+    def get(text, first=False):
         for feature in Feature.list():
-            if feature.value.match(text):
+            if feature.value.match(text) and (feature != Feature.FIRST_WORD or not first):
                 return feature
         return Feature.OTHER_CASE
 
@@ -111,7 +111,7 @@ class Model:
         self.next_backoff_prob_1 = [defaultdict(float) for _ in xrange(size)]   # Without word_prev
 
     # Pr(NC | NC^-1, W^-1)
-    def marker_prob(self, marker_prev, word_prev, marker_curr):
+    def marker_prob(self, marker_prev, word_prev, marker_curr, first=False):
         prob = self.marker_selection_prob[marker_prev][word_prev][marker_curr]
         if not prob:
             prob = self.marker_backoff_prob_0[marker_prev][marker_curr] / self.num_words
@@ -120,21 +120,23 @@ class Model:
         return prob
 
     # Pr(WF_1 | NC, NC^-1)
-    def first_prob(self, marker_prev, marker_curr, word_curr):
+    def first_prob(self, marker_prev, marker_curr, word_curr, first=False):
         prob = self.first_selection_prob[marker_prev][marker_curr][word_curr]
         if not prob:
             prob = self.first_backoff_prob_0[marker_curr][word_curr] / len(Marker.list())
         if not prob:
-            prob = self.first_backoff_prob_1[marker_prev][marker_curr][Feature.get(word_curr)] / self.num_words * len(Feature.list())
+            feature_curr = Feature.get(word_curr, first)
+            prob = self.first_backoff_prob_1[marker_prev][marker_curr][feature_curr] / self.num_words * len(Feature.list())
         if not prob:
             prob = 1 / self.num_words / (len(Marker.list()) ** 2)
         return prob
 
     # Pr(WF | WF^-1, NC)
-    def next_prob(self, marker_curr, word_prev, word_curr):
+    def next_prob(self, marker_curr, word_prev, word_curr, first=False):
         prob = self.next_selection_prob[marker_curr][word_prev][word_curr]
         if not prob:
-            prob = self.next_backoff_prob_0[marker_curr][word_prev][Feature.get(word_curr)] / self.num_words * len(Feature.list())
+            feature_curr = Feature.get(word_curr, first)
+            prob = self.next_backoff_prob_0[marker_curr][word_prev][feature_curr] / self.num_words * len(Feature.list())
         if not prob:
             prob = 1 / (self.num_words ** 2) / len(Marker.list())
         return prob
@@ -301,17 +303,19 @@ class Model:
                     if marker_curr == marker_start or marker_curr == marker_end:
                         continue
                     if marker_prev != marker_curr:
-                        prob = self.marker_prob(marker_prev, word_prev, marker_curr)
-                        prob *= self.first_prob(marker_prev, marker_curr, word_curr)
+                        prob = self.marker_prob(marker_prev, word_prev, marker_curr, step == 0)
+                        prob *= self.first_prob(marker_prev, marker_curr, word_curr, step == 0)
                     else:
-                        prob = self.next_prob(marker_curr, word_prev, word_curr)
-                        prob *= 1.0 - self.next_prob(marker_curr, word_prev, word_end)
+                        prob = self.next_prob(marker_curr, word_prev, word_curr, step == 0)
+                        prob *= 1.0 - self.next_prob(marker_curr, word_prev, word_end, step == 0)
                     # print "  {} -> {}: {}".format(Marker.get(marker_prev).name, Marker.get(marker_curr).name, prob)
                     prob *= probs_prev[marker_prev]
                     if prob > probs_curr[marker_curr]:
                         # print "probs_curr[{}] = {}".format(Marker.get(marker_curr).name, prob)
                         probs_curr[marker_curr] = prob
                         paths[step][marker_curr] = marker_prev
+            marker_id = probs_curr.index(max(probs_curr))
+            # print Marker.get(marker_id).colorize(word_curr)
             # print probs_curr
             word_prev = word_curr
             probs_prev = probs_curr
@@ -378,7 +382,7 @@ def test_hmm(test_data):
         words_list = words(sentence, positions=True)
         collocations = model.extract(words_list)
         result.append(collocations)
-        print_sentence(sentence, collocations)
+        # print_sentence(sentence, collocations)
     return result
 
 
@@ -397,5 +401,5 @@ if __name__ == '__main__':
     with open("test.txt", "r") as test:
         sentences_data = map(lambda line: line.decode('utf-8').strip(), test.readlines())
         collocations_data = test_hmm(sentences_data)
-        # for (s, c) in zip(sentences_data, collocations_data):
-        #     print_sentence(s, c)
+        for (s, c) in zip(sentences_data, collocations_data):
+            print_sentence(s, c)
