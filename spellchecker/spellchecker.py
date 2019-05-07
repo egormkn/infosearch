@@ -124,41 +124,142 @@ class Metaphone(Phonetic):
 
 
 class Trie(object):
-    def __init__(self, char):
+    nodes = []
+
+    def __init__(self, char, start=False):
         self.char = char
-        self.str = ""
+        self.query = None
         self.max_prob = 0.0
         self.children = {}
+        if start:
+            self.id = -1
+        else:
+            self.id = len(Trie.nodes)
+            Trie.nodes.append(self)
+
+    def get_children(self):
+        return {c: Trie.nodes[i] for c, i in self.children.iteritems()}
+
+    def get_child(self, c):
+        return Trie.nodes[self.children[c]]
+
+    def set_child(self, c, child):
+        self.children[c] = child.id
 
     def add(self, word, prob=0.0):
-        word = word + "$"
         trie = self
         trie.max_prob = max(trie.max_prob, prob)
-        for c in word:
+        for c in word + "$":
             if c not in trie.children:
                 child = Trie(c)
-                child.str = trie.str + c
-                trie.children[c] = child
+                trie.set_child(c, child)
             else:
-                child = trie.children[c]
+                child = trie.get_child(c)
             child.max_prob = max(child.max_prob, prob)
             trie = child
+        trie.query = word
 
     def is_end(self):
         return self.char == "$"
 
-    def get_results(self, word, limit=100):
-        # word = word + "$"
-        # heap_prev = heapq.heapify([(0.0, self.trie)])
-        # heap_curr = []
-        # for (i, c) in enumerate(word):
-        #     for (score, trie) in heap_prev:
-        #         for child in trie.children:
-        #             if child.char != c:
-        #                 score += log(self.unigram_change_freq[child.char][c])
-        #             heapq.heappush(heap_curr, (score, child))
-        #     heap_prev = heapq.nlargest()
-        return []
+    def get_results(self, word, edit_prob, default_prob, best_score, limit=100):
+        word = "^" + word + "$"
+        result = []
+        queue = []
+        heapq.heappush(queue, (-1.0, 0, self, [('M', '^', '^')]))
+        while len(queue) > 0:
+            path_prev = heapq.heappop(queue)
+            (prob_prev, pos, node_prev, history_prev) = path_prev  # type: (float, int, Trie, list)
+            if pos + 1 < len(word):
+                # --- Process replace/match ---
+                c_correct_prev = node_prev.char
+                c_error_prev = word[pos]
+                c_error_curr = word[pos + 1]
+                for c_correct_curr in node_prev.children:
+                    node_curr = node_prev.get_child(c_correct_curr)
+                    if c_correct_curr == c_error_curr:
+                        prob_curr = 1.0
+                        history_curr = history_prev + [('M', c_correct_curr, c_error_curr)]
+                    else:
+                        prob_curr = edit_prob[c_correct_curr][c_error_curr]
+                        if not prob_curr:
+                            prob_curr = default_prob
+                        history_curr = history_prev + [('R', c_correct_curr, c_error_curr)]
+                    prob_curr *= prob_prev
+                    path_curr = (prob_curr, pos + 1, node_curr, history_curr)
+                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                        heapq.heappush(queue, path_curr)
+                # --- Process addition ---
+                c_correct_prev = node_prev.char
+                c_error_prev = word[pos]
+                c_correct_curr = ' '
+                c_error_curr = word[pos + 1]
+                node_curr = node_prev
+                prob_curr = edit_prob[c_correct_prev + c_correct_curr][c_correct_prev + c_error_curr]
+                if not prob_curr:
+                    prob_curr = default_prob
+                prob_curr *= prob_prev
+                history_curr = history_prev + [('I', ' ', c_error_curr)]
+                path_curr = (prob_curr, pos + 1, node_curr, history_curr)
+                if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                    heapq.heappush(queue, path_curr)
+                # --- Process deletion ---
+                c_correct_prev = node_prev.char
+                c_error_prev = word[pos]
+                c_error_curr = ' '
+                for c_correct_curr in node_prev.children:
+                    node_curr = node_prev.get_child(c_correct_curr)
+                    prob_curr = edit_prob[c_correct_prev + c_correct_curr][c_correct_prev + c_error_curr]
+                    if not prob_curr:
+                        prob_curr = default_prob
+                    history_curr = history_prev + [('D', c_correct_curr, ' ')]
+                    prob_curr *= prob_prev
+                    path_curr = (prob_curr, pos, node_curr, history_curr)
+                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                        heapq.heappush(queue, path_curr)
+                # --- Process transpose ---
+                if pos + 2 < len(word):
+                    c_correct_prev = node_prev.char
+                    c_error_prev = word[pos]
+                    c_error_curr1 = word[pos + 1]
+                    c_error_curr2 = word[pos + 2]
+                    c_correct_curr1 = c_error_curr2
+                    c_correct_curr2 = c_error_curr1
+                    if c_correct_curr1 in node_prev.children:
+                        node_curr1 = node_prev.get_child(c_correct_curr1)
+                        if c_correct_curr2 in node_curr1.children:
+                            node_curr2 = node_curr1.get_child(c_correct_curr2)
+                            prob_curr = edit_prob[c_correct_curr1 + c_correct_curr2][c_error_curr1 + c_error_curr2]
+                            if not prob_curr:
+                                prob_curr = default_prob
+                            history_curr = history_prev + [
+                                ('T', c_correct_curr1, c_error_curr1),
+                                ('T', c_correct_curr2, c_error_curr2)
+                            ]
+                            prob_curr *= prob_prev
+                            path_curr = (prob_curr, pos + 2, node_curr2, history_curr)
+                            if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                                heapq.heappush(queue, path_curr)
+            elif node_prev.is_end():
+                result.append(node_prev.query)
+                if len(result) >= limit > 0:
+                    queue = []
+                    return result
+            else:
+                c_correct_prev = node_prev.char
+                c_error_curr = ' '
+                for c_correct_curr in node_prev.children:
+                    node_curr = node_prev.get_child(c_correct_curr)
+                    prob_curr = edit_prob[c_correct_prev + c_correct_curr][c_correct_prev + c_error_curr]
+                    if not prob_curr:
+                        prob_curr = default_prob
+                    history_curr = history_prev + [('D', c_correct_curr, ' ')]
+                    prob_curr *= prob_prev
+                    path_curr = (prob_curr, pos, node_curr, history_curr)
+                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                        heapq.heappush(queue, path_curr)
+        queue = []
+        return result
 
 
 class SpellChecker(object):
@@ -198,6 +299,10 @@ class SpellChecker(object):
             u".": u"/", u"ю": u".", u"ж": u";"
         }
     }
+    similar_re = {
+        "EN": re.compile(ur"^[ABCEHKMOPTXY]+$", re.I | re.U),
+        "RU": re.compile(ur"^[АВСЕНКМОРТХУ]+$", re.I | re.U)
+    }
     multiplier_re = re.compile(ur"(?<=\d)Х(?=\d)|^Х(?=\d)|(?<=\d)Х$", re.I | re.U)
     layout_re = {
         "RU": re.compile(ur"^[^a-zA-Z]*[а-яА-Я][^a-zA-Z]*$", re.I | re.U),
@@ -206,6 +311,7 @@ class SpellChecker(object):
     translit_fn = {
         "RU": get_translit_function("ru")
     }
+    lambda_coeff = 0.5
 
     def __init__(self):
         self.num_queries = 0  # Total number of queries
@@ -219,7 +325,7 @@ class SpellChecker(object):
         self.layout_prob = {("RU", "EN"): 0.0, ("EN", "RU"): 0.0}  # Layout error model
         self.translit_prob = {("RU", "EN"): 0.0, ("EN", "RU"): 0.0}  # Translit error model
         self.metaphone = Metaphone()  # Metaphone word lists
-        self.trie = Trie("^")  # Dictionary trie
+        self.trie = Trie("^", start=True)  # Dictionary trie
 
     def fit(self, corrections, frequency):
 
@@ -325,8 +431,10 @@ class SpellChecker(object):
                 print "Building trie + metaphone:", i, "/", len(frequency)
 
             prob = self.word_prob[word]
-            # self.trie.add(word, prob)
+            self.trie.add(word, prob)
             self.metaphone.add(word, prob)
+
+        Trie.edit_prob = self.smart_edit_prob
 
         for lang_pair in self.layout_prob:
             print "Layout change probability:", lang_pair, "->", self.layout_prob[lang_pair]
@@ -395,31 +503,32 @@ class SpellChecker(object):
             best_word = self.known_answers[word]
             print word, "->", best_word, "(known)"
             return best_word
-        if re.search(SpellChecker.multiplier_re, word):
-            best_word = re.sub(SpellChecker.multiplier_re, "X", word)
-            print word, "->", best_word
-            return best_word
         initial_intent_prob = self.intent_prob(word)
-        initial_error_prob = self.error_prob(word, word) ** 0.5
+        initial_error_prob = self.error_prob(word, word) ** SpellChecker.lambda_coeff
         best_word = word
         best_score = initial_intent_prob * initial_error_prob
-        metaphone_results = self.metaphone.get_results(word)
-        trie_results = self.trie.get_results(word)
+        metaphone_results = self.metaphone.get_results(word, limit=100)
+        trie_results = self.trie.get_results(word, self.smart_edit_prob, 1 / self.num_queries,
+                                             best_score=initial_intent_prob * initial_error_prob, limit=100)
         for candidate in chain(metaphone_results, trie_results):
             intent_prob = self.intent_prob(candidate)
-            error_prob = self.error_prob(word, candidate) ** 0.5
+            error_prob = self.error_prob(word, candidate) ** SpellChecker.lambda_coeff
             score = intent_prob * error_prob
             if score > best_score:
                 best_score, best_word = score, candidate
         for (lang_desired, lang_used) in self.layout_prob:
             candidate = self.change_layout(word, (lang_used, lang_desired))
             intent_prob = self.intent_prob(candidate)
-            error_prob = self.layout_prob[(lang_desired, lang_used)] ** 0.5
+            error_prob = self.layout_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
             score = intent_prob * error_prob
             if score > best_score:
                 best_score, best_word = score, candidate
         if best_word != word:
-            print word, "->", best_word  #, "\t\t", repr(metaphone_results).decode('unicode-escape')
+            print word, "->", best_word  # , "\t\t", repr(metaphone_results).decode('unicode-escape')
+        elif re.search(SpellChecker.multiplier_re, word):
+            best_word = re.sub(SpellChecker.multiplier_re, "X", word)
+            print word, "->", best_word
+            return best_word
         return best_word
 
     @staticmethod
@@ -511,9 +620,14 @@ def main():
     args = parser.parse_args()
 
     if args.cache:
+        print "Loading model from file:", "spellchecker.bin"
+
         with open("spellchecker.bin", "r") as file_dump:
             model = pickle.load(file_dump)
+            Trie.nodes = pickle.load(file_dump)
         file_dump.close()
+
+        print "Model loaded from spellchecker.bin"
     else:
         with open("public.freq.csv", "r") as correction_file:
             reader = csv.reader(correction_file, encoding='utf-8')
@@ -528,9 +642,14 @@ def main():
         model = SpellChecker()
         model.fit(correction_data, frequency_data)
 
+        print "Saving model to file:", "spellchecker.bin"
+
         with open("spellchecker.bin", "w") as file_dump:
             pickle.dump(model, file_dump)
+            pickle.dump(Trie.nodes, file_dump)
         file_dump.close()
+
+        print "Model saved to spellchecker.bin"
 
     with open("no_fix.submission.csv", "r") as test_file:
         reader = csv.reader(test_file, encoding='utf-8')
