@@ -338,11 +338,9 @@ class SpellChecker(object):
             print "Edit probability:", edit, "->", self.edit_prob[edit]
 
     def error_prob(self, query, intent):  # P(q|c)
-        model_probs = [1.0, 0.0]
-        model_coeffs = [1.0, 0.0]
+        result_prob = 1.0
 
-        model0_distance = self.distance(intent, query)
-        (distance, prescription) = model0_distance
+        (distance, prescription) = self.distance(intent, query)
         prescription = [('M', '^', '^')] + prescription + [('M', '$', '$')]  # Add start and end symbols
         pairs = pairwise(prescription)
         prev_char = "^"
@@ -351,18 +349,17 @@ class SpellChecker(object):
             c_error = c_error_prev + c_error_curr
             if edit_curr == 'T' and c_correct_prev == c_error_curr and c_error_prev == c_correct_curr:
                 prob = self.smart_edit_prob[c_correct][c_error]
-                model_probs[0] *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else 1 / self.num_queries
             elif edit_curr == 'D' or edit_curr == 'I':
                 prob = self.smart_edit_prob[prev_char + c_correct_curr][prev_char + c_error_curr]
-                model_probs[0] *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else 1 / self.num_queries
             elif edit_curr == 'R':
                 prob = self.smart_edit_prob[c_correct_curr][c_error_curr]
-                model_probs[0] *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else 1 / self.num_queries
             if c_correct_curr != " ":
                 prev_char = c_correct_curr
 
-        return model_probs[0]
-        # model_probs[0] = math.e ** distance
+        return result_prob
 
         # model1_distance = self.distance(intent, query,
         #                                 delete_cost=lambda c: math.log(1.0 - self.unigram_edit_prob[c][' ']),
@@ -403,23 +400,23 @@ class SpellChecker(object):
             print word, "->", best_word
             return best_word
         initial_intent_prob = self.intent_prob(word)
-        initial_error_prob = self.error_prob(word, word)
+        initial_error_prob = self.error_prob(word, word) ** 0.5
         best_word = word
         best_score = initial_intent_prob * initial_error_prob
         metaphone_results = self.metaphone.get_results(word)
         trie_results = self.trie.get_results(word)
         for candidate in chain(metaphone_results, trie_results):
             intent_prob = self.intent_prob(candidate)
-            error_prob = self.error_prob(word, candidate)
+            error_prob = self.error_prob(word, candidate) ** 0.5
             score = intent_prob * error_prob
-            if score > best_score and intent_prob > initial_intent_prob * 10:
+            if score > best_score:
                 best_score, best_word = score, candidate
         for (lang_desired, lang_used) in self.layout_prob:
             candidate = self.change_layout(word, (lang_used, lang_desired))
             intent_prob = self.intent_prob(candidate)
-            error_prob = self.layout_prob[(lang_desired, lang_used)]
+            error_prob = self.layout_prob[(lang_desired, lang_used)] ** 0.5
             score = intent_prob * error_prob
-            if score > best_score and intent_prob > initial_intent_prob * 10:
+            if score > best_score:
                 best_score, best_word = score, candidate
         if best_word != word:
             print word, "->", best_word  #, "\t\t", repr(metaphone_results).decode('unicode-escape')
