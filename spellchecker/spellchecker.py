@@ -3,7 +3,6 @@
 
 from __future__ import division
 
-import sys
 import argparse
 import unicodecsv as csv
 import heapq
@@ -178,7 +177,9 @@ class Trie(object):
                 for c_correct_curr in node_prev.children:
                     node_curr = node_prev.get_child(c_correct_curr)
                     if c_correct_curr == c_error_curr:
-                        prob_curr = 1.0
+                        prob_curr = edit_prob[c_correct_curr][c_error_curr]
+                        if not prob_curr:
+                            prob_curr = 1.0
                         history_curr = history_prev + [('M', c_correct_curr, c_error_curr)]
                     else:
                         prob_curr = edit_prob[c_correct_curr][c_error_curr]
@@ -390,7 +391,7 @@ class SpellChecker(object):
                     self.smart_edit_prob[c_correct][c_error] += num_queries
                 elif edit_curr == 'D' or edit_curr == 'I':
                     self.smart_edit_prob[prev_char + c_correct_curr][prev_char + c_error_curr] += num_queries
-                elif edit_curr == 'R':
+                elif edit_curr == 'R' or edit_curr == 'M':
                     self.smart_edit_prob[c_correct_curr][c_error_curr] += num_queries
                 if c_correct_curr != " ":
                     prev_char = c_correct_curr
@@ -422,7 +423,7 @@ class SpellChecker(object):
             for c_error in self.smart_edit_prob[c_correct]:
                 if len(c_correct) == 2 and c_correct[1] == ' ':  # Insert
                     self.smart_edit_prob[c_correct][c_error] /= num_smart_edits[c_correct[0]]
-                else:  # Replace, delete or transpose
+                else:  # Match, replace, delete or transpose
                     self.smart_edit_prob[c_correct][c_error] /= num_smart_edits[c_correct]
 
         # Build trie and metaphone
@@ -433,8 +434,6 @@ class SpellChecker(object):
             prob = self.word_prob[word]
             self.trie.add(word, prob)
             self.metaphone.add(word, prob)
-
-        Trie.edit_prob = self.smart_edit_prob
 
         for lang_pair in self.layout_prob:
             print "Layout change probability:", lang_pair, "->", self.layout_prob[lang_pair]
@@ -461,9 +460,9 @@ class SpellChecker(object):
             elif edit_curr == 'D' or edit_curr == 'I':
                 prob = self.smart_edit_prob[prev_char + c_correct_curr][prev_char + c_error_curr]
                 result_prob *= prob if prob else 1 / self.num_queries
-            elif edit_curr == 'R':
+            elif edit_curr == 'R' or edit_curr == 'M':
                 prob = self.smart_edit_prob[c_correct_curr][c_error_curr]
-                result_prob *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else (1 / self.num_queries if edit_curr == 'R' else 1.0)
             if c_correct_curr != " ":
                 prev_char = c_correct_curr
 
@@ -499,9 +498,12 @@ class SpellChecker(object):
         return self.word_prob[correction]
 
     def fix(self, word):
-        if word in self.known_answers:
-            best_word = self.known_answers[word]
-            print word, "->", best_word, "(known)"
+        # if word in self.known_answers:
+        #     best_word = self.known_answers[word]
+        #     print word, "->", best_word, "(known)"
+        #     return best_word
+        if re.search(SpellChecker.multiplier_re, word):
+            best_word = re.sub(SpellChecker.multiplier_re, "X", word)
             return best_word
         initial_intent_prob = self.intent_prob(word)
         initial_error_prob = self.error_prob(word, word) ** SpellChecker.lambda_coeff
@@ -510,25 +512,40 @@ class SpellChecker(object):
         metaphone_results = self.metaphone.get_results(word, limit=100)
         trie_results = self.trie.get_results(word, self.smart_edit_prob, 1 / self.num_queries,
                                              best_score=initial_intent_prob * initial_error_prob, limit=100)
-        for candidate in chain(metaphone_results, trie_results):
+        candidates = set(metaphone_results) | set(trie_results) | {word}
+        for candidate in candidates:
             intent_prob = self.intent_prob(candidate)
             error_prob = self.error_prob(word, candidate) ** SpellChecker.lambda_coeff
             score = intent_prob * error_prob
-            if score > best_score:
+            if score > best_score and intent_prob > initial_intent_prob:
                 best_score, best_word = score, candidate
-        for (lang_desired, lang_used) in self.layout_prob:
-            candidate = self.change_layout(word, (lang_used, lang_desired))
-            intent_prob = self.intent_prob(candidate)
-            error_prob = self.layout_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
-            score = intent_prob * error_prob
-            if score > best_score:
-                best_score, best_word = score, candidate
-        if best_word != word:
-            print word, "->", best_word  # , "\t\t", repr(metaphone_results).decode('unicode-escape')
-        elif re.search(SpellChecker.multiplier_re, word):
-            best_word = re.sub(SpellChecker.multiplier_re, "X", word)
-            print word, "->", best_word
+        layout_results = []
+        translit_results = []
+        for word_test in [word, best_word]:
+            for (lang_desired, lang_used) in self.layout_prob:
+                candidate = self.change_layout(word_test, (lang_used, lang_desired))
+                layout_results.append(candidate)
+                intent_prob = self.intent_prob(candidate)
+                error_prob = self.layout_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
+                score = intent_prob * error_prob
+                if score > best_score and intent_prob > initial_intent_prob:
+                    best_score, best_word = score, candidate
+            for (lang_desired, lang_used) in self.translit_prob:
+                candidate = self.transliterate(word_test, (lang_used, lang_desired))
+                translit_results.append(candidate)
+                intent_prob = self.intent_prob(candidate)
+                error_prob = self.translit_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
+                score = intent_prob * error_prob
+                if score > best_score and intent_prob > initial_intent_prob:
+                    best_score, best_word = score, candidate
+        if word in self.known_answers and self.known_answers[word] != best_word:
+            candidates = candidates | set(layout_results) | set(translit_results)
+            known_answer = self.known_answers[word]
+            fmt = "{}" if known_answer in candidates else u"\u001b[31m{}\u001b[0m"
+            print "{} -> {} (known: {})".format(word, best_word, fmt.format(known_answer))
             return best_word
+        elif best_word != word:
+            print word, "->", best_word
         return best_word
 
     @staticmethod
@@ -617,7 +634,11 @@ class SpellChecker(object):
 def main():
     parser = argparse.ArgumentParser(description="Spellchecker")
     parser.add_argument("--cache", help="Use cached language and error models", action="store_true")
+    parser.add_argument("--input", help="Input file", nargs='?', default="no_fix.submission.csv")
+    parser.add_argument("--output", help="Output file", nargs='?', default="fix.submission.csv")
     args = parser.parse_args()
+
+    print args
 
     if args.cache:
         print "Loading model from file:", "spellchecker.bin"
@@ -651,12 +672,12 @@ def main():
 
         print "Model saved to spellchecker.bin"
 
-    with open("no_fix.submission.csv", "r") as test_file:
+    with open(args.input, "r") as test_file:
         reader = csv.reader(test_file, encoding='utf-8')
         next(reader, None)  # skip the header
         test_data = map(lambda (orig, corr): orig, reader)
 
-    with open("fix.submission.csv", "w") as submission_file:
+    with open(args.output, "w") as submission_file:
         writer = csv.writer(submission_file, encoding='utf-8')
         writer.writerow(["Id", "Expected"])
         test_size = len(test_data)
