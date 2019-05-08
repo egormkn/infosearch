@@ -636,9 +636,12 @@ def main():
     parser.add_argument("--cache", help="Use cached language and error models", action="store_true")
     parser.add_argument("--input", help="Input file", nargs='?', default="no_fix.submission.csv")
     parser.add_argument("--output", help="Output file", nargs='?', default="fix.submission.csv")
+    parser.add_argument('--coeff', help="Coefficient", type=float, default=-1.0)
     args = parser.parse_args()
 
     print args
+    if args.coeff > 0:
+        SpellChecker.lambda_coeff = args.coeff
 
     if args.cache:
         print "Loading model from file:", "spellchecker.bin"
