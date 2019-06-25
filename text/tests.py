@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 # coding: utf-8
 
 # Learning Name-finder
@@ -101,8 +102,8 @@ class Model:
         self.first_selection_prob = [[defaultdict(float) for _ in xrange(size)] for _ in xrange(size)]
         self.next_selection_prob = [defaultdict(lambda: defaultdict(float)) for _ in xrange(size)]
 
-        self.marker_backoff_prob_0 = [[0.0] * size for _ in xrange(size)]       # Without word_prev
-        self.marker_backoff_prob_1 = [0.0] * size                               # Without marker_prev
+        self.marker_backoff_prob_0 = [defaultdict(lambda: [0.0] * size) for _ in xrange(size)]
+        self.marker_backoff_prob_1 = [[0.0] * size for _ in xrange(size)]       # Without word_prev
 
         self.first_backoff_prob_0 = [defaultdict(float) for _ in xrange(size)]  # Without marker_prev
         self.first_backoff_prob_1 = [[defaultdict(float) for _ in xrange(size)] for _ in xrange(size)]
@@ -113,8 +114,11 @@ class Model:
     # Pr(NC | NC^-1, W^-1)
     def marker_prob(self, marker_prev, word_prev, marker_curr, first=False):
         prob = self.marker_selection_prob[marker_prev][word_prev][marker_curr]
+        # if not prob:
+        #     feature_prev = Feature.get(word_prev, first)
+        #     prob = self.marker_backoff_prob_0[marker_prev][feature_prev][marker_curr] / self.num_words * len(Feature.list())
         if not prob:
-            prob = self.marker_backoff_prob_0[marker_prev][marker_curr] / self.num_words
+            prob = self.marker_backoff_prob_1[marker_prev][marker_curr] / self.num_words
         if not prob:
             prob = 1 / self.num_words / (len(Marker.list()) ** 2)
         return prob
@@ -232,6 +236,21 @@ class Model:
 
         # marker_backoff_prob_0
         for marker_prev in xrange(size):
+            marker_counts_0 = defaultdict(int)
+            marker_selections_0 = defaultdict(lambda: [0] * size)
+            for (word_prev, denom) in marker_counts[marker_prev].iteritems():
+                feature_prev = Feature.get(word_prev)
+                marker_counts_0[feature_prev] += denom
+                for marker_curr in xrange(size):
+                    num = marker_selections[marker_prev][word_prev][marker_curr]
+                    marker_selections_0[feature_prev][marker_curr] += num
+            for (feature_prev, denom) in marker_counts_0.iteritems():
+                for marker_curr in xrange(size):
+                    num = marker_selections_0[feature_prev][marker_curr]
+                    self.marker_backoff_prob_0[marker_prev][feature_prev][marker_curr] = num / denom
+
+        # marker_backoff_prob_1
+        for marker_prev in xrange(size):
             marker_selections_0 = [0] * size
             marker_counts_0 = 0
             for (word_prev, denom) in marker_counts[marker_prev].iteritems():
@@ -242,7 +261,7 @@ class Model:
             for marker_curr in xrange(size):
                 num = marker_selections_0[marker_curr]
                 denom = marker_counts_0
-                self.marker_backoff_prob_0[marker_prev][marker_curr] = num / denom if denom else 0.0
+                self.marker_backoff_prob_1[marker_prev][marker_curr] = num / denom if denom else 0.0
 
         # first_backoff_prob_0
         marker_trans_0 = [0] * size
@@ -265,7 +284,8 @@ class Model:
                 denom = marker_trans[marker_prev][marker_curr]
                 marker_trans_wordf_0 = defaultdict(int)
                 for (word_curr, num) in marker_trans_wordf[marker_prev][marker_curr].iteritems():
-                    marker_trans_wordf_0[Feature.get(word_curr)] += num
+                    feature_curr = Feature.get(word_curr)
+                    marker_trans_wordf_0[feature_curr] += num
                 for (feature_curr, num) in marker_trans_wordf_0.iteritems():
                     self.first_backoff_prob_1[marker_prev][marker_curr][feature_curr] = num / denom
 
@@ -274,7 +294,8 @@ class Model:
             for (word_prev, denom) in marker_wordf[marker_curr].iteritems():
                 marker_wordf_trans_0 = defaultdict(int)
                 for (word_curr, num) in marker_wordf_trans[marker_curr][word_prev].iteritems():
-                    marker_wordf_trans_0[Feature.get(word_curr)] += num
+                    feature_curr = Feature.get(word_curr)
+                    marker_wordf_trans_0[feature_curr] += num
                 for (feature_curr, num) in marker_wordf_trans_0.iteritems():
                     self.next_backoff_prob_0[marker_curr][word_prev][feature_curr] = num / denom
 
