@@ -132,8 +132,10 @@ class Trie(object):
         self.children = {}
         if start:
             self.id = -1
+            self.str = "^"
         else:
             self.id = len(Trie.nodes)
+            self.str = ""
             Trie.nodes.append(self)
 
     def get_children(self):
@@ -151,6 +153,7 @@ class Trie(object):
         for c in word + "$":
             if c not in trie.children:
                 child = Trie(c)
+                child.str = trie.str + c
                 trie.set_child(c, child)
             else:
                 child = trie.get_child(c)
@@ -169,6 +172,7 @@ class Trie(object):
         while len(queue) > 0:
             path_prev = heapq.heappop(queue)
             (prob_prev, pos, node_prev, history_prev) = path_prev  # type: (float, int, Trie, list)
+            # print node_prev.str
             if pos + 1 < len(word):
                 # --- Process replace/match ---
                 c_correct_prev = node_prev.char
@@ -188,7 +192,7 @@ class Trie(object):
                         history_curr = history_prev + [('R', c_correct_curr, c_error_curr)]
                     prob_curr *= prob_prev
                     path_curr = (prob_curr, pos + 1, node_curr, history_curr)
-                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                    if ((-prob_curr) ** SpellChecker.error_coeff) * (node_curr.max_prob ** SpellChecker.intent_coeff) > best_score * 0.5:
                         heapq.heappush(queue, path_curr)
                 # --- Process addition ---
                 c_correct_prev = node_prev.char
@@ -202,7 +206,7 @@ class Trie(object):
                 prob_curr *= prob_prev
                 history_curr = history_prev + [('I', ' ', c_error_curr)]
                 path_curr = (prob_curr, pos + 1, node_curr, history_curr)
-                if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                if ((-prob_curr) ** SpellChecker.error_coeff) * (node_curr.max_prob ** SpellChecker.intent_coeff) > best_score * 0.5:
                     heapq.heappush(queue, path_curr)
                 # --- Process deletion ---
                 c_correct_prev = node_prev.char
@@ -216,7 +220,7 @@ class Trie(object):
                     history_curr = history_prev + [('D', c_correct_curr, ' ')]
                     prob_curr *= prob_prev
                     path_curr = (prob_curr, pos, node_curr, history_curr)
-                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                    if ((-prob_curr) ** SpellChecker.error_coeff) * (node_curr.max_prob ** SpellChecker.intent_coeff) > best_score * 0.5:
                         heapq.heappush(queue, path_curr)
                 # --- Process transpose ---
                 if pos + 2 < len(word):
@@ -239,7 +243,7 @@ class Trie(object):
                             ]
                             prob_curr *= prob_prev
                             path_curr = (prob_curr, pos + 2, node_curr2, history_curr)
-                            if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                            if ((-prob_curr) ** SpellChecker.error_coeff) * (node_curr.max_prob ** SpellChecker.intent_coeff) > best_score * 0.5:
                                 heapq.heappush(queue, path_curr)
             elif node_prev.is_end():
                 result.append(node_prev.query)
@@ -257,7 +261,7 @@ class Trie(object):
                     history_curr = history_prev + [('D', c_correct_curr, ' ')]
                     prob_curr *= prob_prev
                     path_curr = (prob_curr, pos, node_curr, history_curr)
-                    if -prob_curr * node_curr.max_prob ** SpellChecker.lambda_coeff > best_score:
+                    if ((-prob_curr) ** SpellChecker.error_coeff) * (node_curr.max_prob ** SpellChecker.intent_coeff) > best_score * 0.5:
                         heapq.heappush(queue, path_curr)
         queue = []
         return result
@@ -312,7 +316,8 @@ class SpellChecker(object):
     translit_fn = {
         "RU": get_translit_function("ru")
     }
-    lambda_coeff = 0.5
+    intent_coeff = 0.03
+    error_coeff = 0.02
 
     def __init__(self):
         self.num_queries = 0  # Total number of queries
@@ -327,6 +332,7 @@ class SpellChecker(object):
         self.translit_prob = {("RU", "EN"): 0.0, ("EN", "RU"): 0.0}  # Translit error model
         self.metaphone = Metaphone()  # Metaphone word lists
         self.trie = Trie("^", start=True)  # Dictionary trie
+        self.default_prob = 0.0
 
     def fit(self, corrections, frequency):
 
@@ -411,6 +417,8 @@ class SpellChecker(object):
         for edit in self.edit_prob:
             self.edit_prob[edit] /= num_unigram_edits
 
+        self.default_prob = 1 / num_unigram_edits
+
         for c_correct in self.unigram_edit_prob:
             for c_error in self.unigram_edit_prob[c_correct]:
                 self.unigram_edit_prob[c_correct][c_error] /= num_unigram_edits
@@ -456,13 +464,13 @@ class SpellChecker(object):
             c_error = c_error_prev + c_error_curr
             if edit_curr == 'T' and c_correct_prev == c_error_curr and c_error_prev == c_correct_curr:
                 prob = self.smart_edit_prob[c_correct][c_error]
-                result_prob *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else self.default_prob
             elif edit_curr == 'D' or edit_curr == 'I':
                 prob = self.smart_edit_prob[prev_char + c_correct_curr][prev_char + c_error_curr]
-                result_prob *= prob if prob else 1 / self.num_queries
+                result_prob *= prob if prob else self.default_prob
             elif edit_curr == 'R' or edit_curr == 'M':
                 prob = self.smart_edit_prob[c_correct_curr][c_error_curr]
-                result_prob *= prob if prob else (1 / self.num_queries if edit_curr == 'R' else 1.0)
+                result_prob *= prob if prob else (self.default_prob if edit_curr == 'R' else 1.0)
             if c_correct_curr != " ":
                 prev_char = c_correct_curr
 
@@ -505,44 +513,60 @@ class SpellChecker(object):
         if re.search(SpellChecker.multiplier_re, word):
             best_word = re.sub(SpellChecker.multiplier_re, "X", word)
             return best_word
-        initial_intent_prob = self.intent_prob(word)
-        initial_error_prob = self.error_prob(word, word) ** SpellChecker.lambda_coeff
+        initial_intent_prob = self.intent_prob(word) ** SpellChecker.intent_coeff
+        initial_error_prob = self.error_prob(word, word) ** SpellChecker.error_coeff
+        initial_score = initial_intent_prob * initial_error_prob
+        best_intent_prob = initial_intent_prob
+        best_error_prob = initial_error_prob
+        best_score = best_intent_prob * best_error_prob
         best_word = word
-        best_score = initial_intent_prob * initial_error_prob
-        metaphone_results = self.metaphone.get_results(word, limit=100)
-        trie_results = self.trie.get_results(word, self.smart_edit_prob, 1 / self.num_queries,
-                                             best_score=initial_intent_prob * initial_error_prob, limit=100)
+        metaphone_results = self.metaphone.get_results(word, limit=50)
+        trie_results = self.trie.get_results(word, self.smart_edit_prob, self.default_prob,
+                                             best_score=initial_score, limit=10)
         candidates = set(metaphone_results) | set(trie_results) | {word}
         for candidate in candidates:
-            intent_prob = self.intent_prob(candidate)
-            error_prob = self.error_prob(word, candidate) ** SpellChecker.lambda_coeff
+            intent_prob = self.intent_prob(candidate) ** SpellChecker.intent_coeff
+            error_prob = self.error_prob(word, candidate) ** SpellChecker.error_coeff
             score = intent_prob * error_prob
             if score > best_score and intent_prob > initial_intent_prob:
                 best_score, best_word = score, candidate
+                best_intent_prob = intent_prob
+                best_error_prob = error_prob
         layout_results = []
         translit_results = []
         for word_test in [word, best_word]:
             for (lang_desired, lang_used) in self.layout_prob:
                 candidate = self.change_layout(word_test, (lang_used, lang_desired))
                 layout_results.append(candidate)
-                intent_prob = self.intent_prob(candidate)
-                error_prob = self.layout_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
+                intent_prob = self.intent_prob(candidate) ** SpellChecker.intent_coeff
+                error_prob = self.layout_prob[(lang_desired, lang_used)] ** SpellChecker.error_coeff
                 score = intent_prob * error_prob
                 if score > best_score and intent_prob > initial_intent_prob:
                     best_score, best_word = score, candidate
+                    best_intent_prob = intent_prob
+                    best_error_prob = error_prob
             for (lang_desired, lang_used) in self.translit_prob:
                 candidate = self.transliterate(word_test, (lang_used, lang_desired))
                 translit_results.append(candidate)
-                intent_prob = self.intent_prob(candidate)
-                error_prob = self.translit_prob[(lang_desired, lang_used)] ** SpellChecker.lambda_coeff
+                intent_prob = self.intent_prob(candidate) ** SpellChecker.intent_coeff
+                error_prob = self.translit_prob[(lang_desired, lang_used)] ** SpellChecker.error_coeff
                 score = intent_prob * error_prob
                 if score > best_score and intent_prob > initial_intent_prob:
                     best_score, best_word = score, candidate
+                    best_intent_prob = intent_prob
+                    best_error_prob = error_prob
+        candidates = candidates | set(layout_results) | set(translit_results)
         if word in self.known_answers and self.known_answers[word] != best_word:
-            candidates = candidates | set(layout_results) | set(translit_results)
             known_answer = self.known_answers[word]
-            fmt = "{}" if known_answer in candidates else u"\u001b[31m{}\u001b[0m"
-            print "{} -> {} (known: {})".format(word, best_word, fmt.format(known_answer))
+            known_intent_prob = self.intent_prob(known_answer) ** SpellChecker.intent_coeff
+            known_error_prob = self.error_prob(known_answer, word) ** SpellChecker.error_coeff
+            known_score = known_intent_prob * known_error_prob
+            #v print u"result += int(({} ** x) * ({} ** y) < ({} ** x) * ({} ** y))".format(best_error_prob, best_intent_prob, known_error_prob, known_intent_prob)
+
+            fmt = u"{}" if known_answer in candidates else u"\u001b[31m{}\u001b[0m"
+            print u"{} -> {} (known: {})".format(word, best_word, fmt.format(known_answer))
+            if known_answer not in candidates:
+                print repr(trie_results).decode('unicode-escape')
             return best_word
         elif best_word != word:
             print word, "->", best_word
@@ -641,7 +665,7 @@ def main():
 
     print args
     if args.coeff > 0:
-        SpellChecker.lambda_coeff = args.coeff
+        SpellChecker.intent_coeff = args.coeff
 
     if args.cache:
         print "Loading model from file:", "spellchecker.bin"
@@ -668,10 +692,10 @@ def main():
 
         print "Saving model to file:", "spellchecker.bin"
 
-        with open("spellchecker.bin", "w") as file_dump:
-            pickle.dump(model, file_dump)
-            pickle.dump(Trie.nodes, file_dump)
-        file_dump.close()
+        # with open("spellchecker.bin", "w") as file_dump:
+        #     pickle.dump(model, file_dump)
+        #     pickle.dump(Trie.nodes, file_dump)
+        # file_dump.close()
 
         print "Model saved to spellchecker.bin"
 
